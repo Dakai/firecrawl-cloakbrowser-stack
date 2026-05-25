@@ -1,0 +1,96 @@
+services:
+  cloakbrowser:
+    image: cloakhq/cloakbrowser:latest
+    container_name: cloakbrowser
+    restart: always
+    command: cloakserve
+    ports:
+      - "127.0.0.1:9222:9222"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9222/json/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - scraping-network
+
+  redis:
+    image: redis:alpine
+    container_name: firecrawl-redis
+    restart: always
+    networks:
+      - scraping-network
+  nuq-postgres:
+    build:
+      context: ./nuq-postgres # ← our local Dockerfile + nuq.sql
+    container_name: firecrawl-nuq-postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=firecrawl
+      - POSTGRES_PASSWORD=firecrawl_password
+      - POSTGRES_DB=firecrawl
+    volumes:
+      - nuq-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "psql -U firecrawl -d firecrawl -c 'SELECT 1 FROM nuq.queue_crawl_finished LIMIT 0' 2>/dev/null && echo ok",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - scraping-network
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: firecrawl-rabbitmq
+    restart: always
+    environment:
+      - RABBITMQ_DEFAULT_USER=firecrawl
+      - RABBITMQ_DEFAULT_PASS=firecrawl_password
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - scraping-network
+
+  firecrawl-api:
+    image: ghcr.io/firecrawl/firecrawl:latest
+    container_name: firecrawl-api
+    restart: always
+    ports:
+      - "0.0.0.0:3002:3002"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - REDIS_RATE_LIMIT_URL=redis://redis:6379 # ← add this
+      - PORT=3002
+      - NUQ_DATABASE_URL=postgres://firecrawl:firecrawl_password@nuq-postgres:5432/firecrawl
+      - NUQ_RABBITMQ_URL=amqp://firecrawl:firecrawl_password@rabbitmq:5672
+      - PLAYWRIGHT_CHROME_WS_ENDPOINT=ws://cloakbrowser:9222
+      - NUM_WORKERS_PER_QUEUE=4
+      - USE_CHROME_SANDBOX=false
+      - USE_DB_AUTHENTICATION=false
+    depends_on:
+      redis:
+        condition: service_started
+      nuq-postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      cloakbrowser:
+        condition: service_healthy
+    networks:
+      - scraping-network
+
+networks:
+  scraping-network:
+    driver: bridge
+
+volumes:
+  nuq-db-data:
