@@ -67,6 +67,7 @@ services:
     ports:
       - "0.0.0.0:3002:3002"
     environment:
+      - HOST=0.0.0.0
       - REDIS_URL=redis://redis:6379
       - REDIS_RATE_LIMIT_URL=redis://redis:6379 # ← add this
       - PORT=3002
